@@ -1,0 +1,184 @@
+#!/bin/bash
+
+# check opts
+function usage_quit {
+  echo "Usage: `basename $0` [-cefho]" 1>&2
+  exit 1
+}
+_GHRPR_OPT_EDIT=0
+_GHRPR_OPT_FORCE=0
+_GHRPR_OPT_OPEN=0
+_GHRPR_OPT_INITIALIZER=""
+while getopts efhi:o OPT
+do
+  case $OPT in
+    c)  _GHRPR_OPT_INITIALIZER=$OPTARG
+        ;;
+    e)  _GHRPR_OPT_EDIT=1
+        ;;
+    f)  _GHRPR_OPT_FORCE=1
+        ;;
+    h)  usage_quit
+        ;;
+    o)  _GHRPR_OPT_OPEN=1
+        ;;
+    \?) usage_quit
+        ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+# confirm installed hub command
+which hub > /dev/null
+if [ $? -ne 0 ]; then
+  echo "You need to install hub command (https://hub.github.com/) first."
+  exit 1
+fi
+
+# environment variables
+_GITHUB_BRANCH_DEVELOP="develop"
+_GITHUB_BRANCH_RELEASE="master"
+_GHRPR_EDITOR="vim"
+
+[ -n "$GHRPR_DEVELOP_BRANCH" ] && _GITHUB_BRANCH_DEVELOP=$GHRPR_DEVELOP_BRANCH
+[ -n "$GHRPR_RELEASE_BRANCH" ] && _GITHUB_BRANCH_RELEASE=$GHRPR_RELEASE_BRANCH
+[ -n "$GHRPR_EDITOR" ] && _GITHUB_EDITOR=$GHRPR_EDITOR
+
+_GHRPR_WORKING_DIR=/tmp/github-release-pr/$$
+_GHRPR_MERGES_LOG=$_GHRPR_WORKING_DIR/merges.log
+_GHRPR_TEMPLATE=$_GHRPR_WORKING_DIR/release-template.md
+_GHRPR_FUNC_CREATE_TEMPLATE=create_template_default
+
+# prepare working dir
+if [ -d $_GHRPR_WORKING_DIR ]; then
+  rm -fR $_GHRPR_WORKING_DIR
+fi
+mkdir -p $_GHRPR_WORKING_DIR
+
+# utility functions
+function quit {
+  rm -fR $_GHRPR_WORKING_DIR
+  exit $1
+}
+
+# git fetch
+git fetch
+[ $? -ne 0 ] && quit 1
+
+# load default initializer
+if [ -n "$_GHRPR_OPT_INITIALIZER" ]; then
+  if [ ! -f $_GHRPR_OPT_INITIALIZER ]; then
+    echo "Cannot find initializing file '$_GHRPR_OPT_INITIALIZER'."
+    quit 1
+  fi
+  . $_GHRPR_OPT_INITIALIZER
+fi
+
+# load original setting
+_GHRPR_REPOSITORY_DIR=`git rev-parse --show-toplevel`
+_GHRPR_REPOSITORY_SETTING=$_GHRPR_REPOSITORY_DIR/.github/release_pr.sh
+if [ -f $_GHRPR_REPOSITORY_SETTING ]; then
+  _GHRPR_FUNC_CREATE_TEMPLATE=create_template
+  . $_GHRPR_REPOSITORY_SETTING
+fi
+
+# get logs
+git log --merges --pretty=full origin/$_GITHUB_BRANCH_RELEASE..origin/$_GITHUB_BRANCH_DEVELOP > $_GHRPR_MERGES_LOG
+[ $? -ne 0 ] && quit 1
+
+if [ ! -s $_GHRPR_MERGES_LOG ]; then
+  echo "No merges to release exist."
+  quit 1
+fi
+
+# parse merges log
+_GHRPR_INX=-1
+_GHRPR_MERGES_COMMIT=()
+_GHRPR_MERGES_MERGE=()
+_GHRPR_MERGES_BRANCH=()
+_GHRPR_MERGES_PR_ID=()
+_GHRPR_MEREGS_AUTHOR=()
+_GHRPR_MERGES_TITLE=()
+while read _LINE
+do
+  # separator
+  if [[ $_LINE =~ ^commit[[:blank:]]([[:alnum:]]+)$ ]]; then
+    _GHRPR_MERGE_COMMIT=${BASH_REMATCH[1]}
+    _GHRPR_MERGE_MERGE=""
+    _GHRPR_MERGE_AUTHOR=""
+    _GHRPR_MERGE_COMMITTER=""
+    _GHRPR_MERGE_IS_PR=0
+    continue
+  fi
+  # merge
+  if [[ $_LINE =~ ^Merge:[[:blank:]](.+)$ ]]; then
+    _GHRPR_MERGE_MERGE=${BASH_REMATCH[1]}
+    continue
+  fi
+  # author
+  if [[ $_LINE =~ ^Author:[[:blank:]](.+)([[:blank:]]\<.+)$ ]]; then
+    _GHRPR_MERGE_AUTHOR=${BASH_REMATCH[1]}
+    continue
+  fi
+  # committer
+  if [[ $_LINE =~ ^Commit:[[:blank:]](.+)$ ]]; then
+    _GHRPR_MERGE_COMMITTER=${BASH_REMATCH[1]}
+    continue
+  fi
+  # pull request id
+  if [[ $_LINE =~ ^Merge[[:blank:]]pull[[:blank:]]request[[:blank:]]#([[:digit:]]+)[[:blank:]]from[[:blank:]][^/]+/(.+)$ ]]; then
+    _GHRPR_INX=$(($_GHRPR_INX+1))
+    _GHRPR_MERGES_PR_ID[$_GHRPR_INX]=${BASH_REMATCH[1]}
+    _GHRPR_MERGES_BRANCH[$_GHRPR_INX]=${BASH_REMATCH[2]}
+    _GHRPR_MERGES_COMMIT[$_GHRPR_INX]=$_GHRPR_MERGE_COMMIT
+    _GHRPR_MERGES_MERGE[$_GHRPR_INX]=$_GHRPR_MERGE_MERGE
+    _GHRPR_MERGES_AUTHOR[$_GHRPR_INX]=$_GHRPR_MERGE_AUTHOR
+    _GHRPR_MERGES_COMMITTER[$_GHRPR_INX]=$_GHRPR_MERGE_COMMITTER
+    _GHRPR_MERGE_IS_PR=1
+    continue
+  fi
+  if [ $_GHRPR_MERGE_IS_PR -eq 1 ]; then
+    if [[ -z "${_GHRPR_MERGES_TITLE[$_GHRPR_INX]}" ]]; then
+      _GHRPR_MERGES_TITLE[$_GHRPR_INX]+=$_LINE
+    fi
+  fi
+done < $_GHRPR_MERGES_LOG
+
+# create template
+function create_template_default {
+  # title
+  date +"[Release] %Y-%m-%d %H:%M" > $_GHRPR_TEMPLATE
+  echo "" >> $_GHRPR_TEMPLATE
+  # create merges list
+  local inx=0
+  for title in "${_GHRPR_MERGES_TITLE[@]}"
+  do
+    local branch_txt=${_GHRPR_MERGES_BRANCH[$inx]}
+    echo "* [$title](${_GHRPR_MERGES_PR_ID[$inx]}) *( __${_GHRPR_MERGES_BRANCH[$inx]}__ by __${_GHRPR_MERGES_AUTHOR[$inx]}__ )*" >> $_GHRPR_TEMPLATE
+    inx=$(($inx+1))
+  done
+  return 0
+}
+$_GHRPR_FUNC_CREATE_TEMPLATE
+[ $? -ne 0 ] && quit 1
+
+# edit message (optional)
+if [ $_GHRPR_OPT_EDIT -eq 1 ]; then
+  $_GHRPR_EDITOR $_GHRPR_TEMPLATE
+fi
+# create pull request
+if [ $_GHRPR_OPT_FORCE -eq 0 ]; then
+  cat $_GHRPR_TEMPLATE
+  echo "---"
+  echo -n "Create this release pull-request? [Y/n]: "
+  read _GHRPR_ANSWER
+  if [ "$_GHRPR_ANSWER" != "Y" ]; then
+    exit 1
+  fi
+fi
+_GHRPR_EXTRA_OPT=""
+[ $_GHRPR_OPT_OPEN -eq 1 ] && _GHRPR_EXTRA_OPT="$_GHRPR_EXTRA_OPT -o"
+hub pull-request -F $_GHRPR_TEMPLATE $_GHRPR_EXTRA_OPT -h $_GITHUB_BRANCH_DEVELOP -b $_GITHUB_BRANCH_RELEASE
+
+# exit
+quit 0
