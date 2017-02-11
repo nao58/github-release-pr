@@ -54,6 +54,7 @@ Create the custom function to generate the new message file names `$_GHRPR_TEMPL
 | Variables                  | Description                                                                 |
 | -------------------------- | --------------------------------------------------------------------------- |
 | $_GHRPR_TEMPLATE           | Text file to put new message                                                |
+| $_GHRPR_REPOSITORY_NAME    | Git repository name                                                         |
 | $_GHRPR_MERGES_TITLE[]     | Merges title                                                                |
 | $_GHRPR_MERGES_PR_ID[]     | Merges ID                                                                   |
 | $_GHRPR_MERGES_BRANCH[]    | Merges branch name                                                          |

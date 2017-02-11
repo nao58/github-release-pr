@@ -9,7 +9,7 @@ _GHRPR_OPT_EDIT=0
 _GHRPR_OPT_FORCE=0
 _GHRPR_OPT_OPEN=0
 _GHRPR_OPT_INITIALIZER=""
-while getopts efhi:o OPT
+while getopts c:efho OPT
 do
   case $OPT in
     c)  _GHRPR_OPT_INITIALIZER=$OPTARG
@@ -48,6 +48,7 @@ _GHRPR_WORKING_DIR=/tmp/github-release-pr/$$
 _GHRPR_MERGES_LOG=$_GHRPR_WORKING_DIR/merges.log
 _GHRPR_TEMPLATE=$_GHRPR_WORKING_DIR/release-template.md
 _GHRPR_FUNC_CREATE_TEMPLATE=create_template_default
+_GHRPR_FUNC_AFTER_CREATE=after_create
 
 # prepare working dir
 if [ -d $_GHRPR_WORKING_DIR ]; then
@@ -81,6 +82,9 @@ if [ -f $_GHRPR_REPOSITORY_SETTING ]; then
   _GHRPR_FUNC_CREATE_TEMPLATE=create_template
   . $_GHRPR_REPOSITORY_SETTING
 fi
+
+# get repository name
+_GHRPR_REPOSITORY_NAME=`git config --local remote.origin.url | sed -n 's#.*/\([^.]*\)\.git#\1#p'`
 
 # get logs
 git log --merges --pretty=full origin/$_GITHUB_BRANCH_RELEASE..origin/$_GITHUB_BRANCH_DEVELOP > $_GHRPR_MERGES_LOG
@@ -159,6 +163,7 @@ function create_template_default {
   done
   return 0
 }
+echo $_GHRPR_FUNC_CREATE_TEMPLATE
 $_GHRPR_FUNC_CREATE_TEMPLATE
 [ $? -ne 0 ] && quit 1
 
@@ -166,6 +171,7 @@ $_GHRPR_FUNC_CREATE_TEMPLATE
 if [ $_GHRPR_OPT_EDIT -eq 1 ]; then
   $_GHRPR_EDITOR $_GHRPR_TEMPLATE
 fi
+
 # create pull request
 if [ $_GHRPR_OPT_FORCE -eq 0 ]; then
   cat $_GHRPR_TEMPLATE
@@ -173,12 +179,23 @@ if [ $_GHRPR_OPT_FORCE -eq 0 ]; then
   echo -n "Create this release pull-request? [Y/n]: "
   read _GHRPR_ANSWER
   if [ "$_GHRPR_ANSWER" != "Y" ]; then
-    exit 1
+    quit 1
   fi
 fi
 _GHRPR_EXTRA_OPT=""
-[ $_GHRPR_OPT_OPEN -eq 1 ] && _GHRPR_EXTRA_OPT="$_GHRPR_EXTRA_OPT -o"
-hub pull-request -F $_GHRPR_TEMPLATE $_GHRPR_EXTRA_OPT -h $_GITHUB_BRANCH_DEVELOP -b $_GITHUB_BRANCH_RELEASE
+_GHRPR_RELEASE_PR_URL=`hub pull-request -F $_GHRPR_TEMPLATE $_GHRPR_EXTRA_OPT -h $_GITHUB_BRANCH_DEVELOP -b $_GITHUB_BRANCH_RELEASE`
+[ $? -ne 0 ] && quit 1
+
+# open browser
+if [ $_GHRPR_OPT_OPEN -eq 1 ]; then
+  open $_GHRPR_RELEASE_PR_URL
+fi
+
+# after create
+if [ "$(type -t $_GHRPR_FUNC_AFTER_CREATE)" = "function" ]; then
+  $_GHRPR_FUNC_AFTER_CREATE
+  [ $? -ne 0 ] && quit 1
+fi
 
 # exit
 quit 0
