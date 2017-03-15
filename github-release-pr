@@ -182,9 +182,11 @@ if [ $_GHRPR_OPT_FORCE -eq 0 ]; then
     quit 1
   fi
 fi
+_GHRPR_PR_RESULT=/tmp/github-release-pr.out.$$
 _GHRPR_EXTRA_OPT=""
-hub pull-request -F $_GHRPR_TEMPLATE $_GHRPR_EXTRA_OPT -h $_GITHUB_BRANCH_DEVELOP -b $_GITHUB_BRANCH_RELEASE | tee /tmp/github-release-pr.out.$$
+hub pull-request -F $_GHRPR_TEMPLATE $_GHRPR_EXTRA_OPT -h $_GITHUB_BRANCH_DEVELOP -b $_GITHUB_BRANCH_RELEASE | tee $_GHRPR_PR_RESULT
 [ $? -ne 0 ] && quit 1
+[ ! -s $_GHRPR_PR_RESULT ] && quit 1
 
 # open browser
 _GHRPR_RELEASE_PR_URL=`tail -1 /tmp/github-release-pr.out.$$`
